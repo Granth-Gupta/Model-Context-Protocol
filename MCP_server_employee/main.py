@@ -1,4 +1,5 @@
 from mcp.server.fastmcp import FastMCP
+import os
 import uvicorn
 
 # Mock employee database
@@ -55,4 +56,7 @@ def get_team_members(manager_id: str) -> str:
 if __name__ == "__main__":
     # Use the MCP server's built-in SSE app
     app = mcp.sse_app()
-    uvicorn.run(app, host="127.0.0.1", port=8002)
+    port = int(os.environ.get("PORT", 8002))
+
+    # Bind to 0.0.0.0 to accept external traffic
+    uvicorn.run(app, host="0.0.0.0", port=port)

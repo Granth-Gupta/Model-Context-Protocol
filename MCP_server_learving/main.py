@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 import uvicorn
+import os
 from typing import List
 
 # In-memory mock database with 20 leave days to start
@@ -52,4 +53,7 @@ def get_leave_history(employee_id: str) -> str:
 if __name__ == "__main__":
     # Use the MCP server's built-in SSE app
     app = mcp.sse_app()
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    port = int(os.environ.get("PORT", 8001))
+
+    # Bind to 0.0.0.0 to accept external traffic
+    uvicorn.run(app, host="0.0.0.0", port=port)

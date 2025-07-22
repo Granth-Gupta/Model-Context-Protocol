@@ -54,12 +54,12 @@ class MCPChatbot:
         # Default configuration
         clients_config = [
             {
-                "url": employee_url or "http://127.0.0.1:8002/sse",
+                "url": employee_url or "http://0.0.0.0:8002/sse",
                 "name": "employee_server",
                 "client_attr": "employee_client"
             },
             {
-                "url": leave_url or "http://127.0.0.1:8001/sse",
+                "url": leave_url or "http://0.0.0.0:8001/sse",
                 "name": "leave_server",
                 "client_attr": "leave_client"
             }
