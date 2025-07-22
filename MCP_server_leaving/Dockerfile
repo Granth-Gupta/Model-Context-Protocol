@@ -2,22 +2,36 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies and uv
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install uv
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies with uv
-COPY requirements.txt .
-RUN uv pip install --no-cache -r requirements.txt
+# Install uv
+RUN pip install --upgrade pip && pip install uv
 
-# Copy application code
+# Copy project configuration files
+COPY pyproject.toml* ./
+COPY uv.lock* ./
+COPY requirements.txt* ./
+
+# Install dependencies
+RUN if [ -f "pyproject.toml" ]; then \
+        uv sync --frozen; \
+    elif [ -f "requirements.toml" ]; then \
+        uv pip install --no-cache -r requirements.txt; \
+    else \
+        echo "Installing basic dependencies..."; \
+        uv pip install fastapi uvicorn pydantic; \
+    fi
+
+# Copy source code
 COPY . .
 
-# Expose port 8001 (leaving server port)
+# Expose port 8001 (different port to avoid conflicts)
 EXPOSE 8001
 
-# Use uv run instead of uvicorn directly
-CMD ["uv", "run", "./main.py"]
+# Run with uv
+CMD ["uv", "run", "main.py"]
