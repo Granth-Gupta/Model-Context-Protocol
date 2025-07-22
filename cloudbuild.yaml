@@ -1,0 +1,43 @@
+steps:
+  # Build MCP Client
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mcp-client:$SHORT_SHA', './MCP_client']
+    id: 'build-client'
+
+  # Build MCP Server Employee
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mcp-server-employee:$SHORT_SHA', './MCP_server_employee']
+    id: 'build-employee'
+
+  # Build MCP Server Leaving
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mcp-server-leaving:$SHORT_SHA', './MCP_server_leaving']
+    id: 'build-leaving'
+
+  # Build MCP UI
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/mcp-ui:$SHORT_SHA', './MCP_UI']
+    id: 'build-ui'
+
+  # Push all images
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/mcp-client:$SHORT_SHA']
+    waitFor: ['build-client']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/mcp-server-employee:$SHORT_SHA']
+    waitFor: ['build-employee']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/mcp-server-leaving:$SHORT_SHA']
+    waitFor: ['build-leaving']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/mcp-ui:$SHORT_SHA']
+    waitFor: ['build-ui']
+
+images:
+  - 'gcr.io/$PROJECT_ID/mcp-client:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/mcp-server-employee:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/mcp-server-leaving:$SHORT_SHA'
+  - 'gcr.io/$PROJECT_ID/mcp-ui:$SHORT_SHA'

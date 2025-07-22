@@ -16,8 +16,8 @@ RUN uv pip install --no-cache -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose port 8000 (since you defined it in code)
-EXPOSE 8000
+# Expose port 8001 (leaving server port)
+EXPOSE 8001
 
 # Use uv run instead of uvicorn directly
 CMD ["uv", "run", "./main.py"]
