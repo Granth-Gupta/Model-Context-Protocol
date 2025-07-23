@@ -1,29 +1,31 @@
-FROM python:3.11-slim
+# Build stage
+FROM python:3.11-slim as builder
+WORKDIR /app
+RUN pip install uv
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
 
+# Runtime stage
+FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    gcc \
     curl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install uv
 
-# Install uv
-RUN pip install --upgrade pip && pip install uv
-
-# Copy project configuration
-COPY pyproject.toml ./
-COPY uv.lock* ./
-
-# Install dependencies
-RUN uv sync --frozen
-
-# Copy source code
+# Copy dependencies from builder
+COPY --from=builder /app/.venv /app/.venv
 COPY . .
 
-# Expose port 8000
-EXPOSE 8000
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash --uid 1000 app && \
+    chown -R app:app /app
+USER app
 
-# Run with uv
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
 CMD ["uv", "run", "main.py"]
