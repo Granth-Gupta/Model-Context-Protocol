@@ -14,10 +14,11 @@ const App = () => {
   const inputRef = useRef(null);
   const toolsDropdownRef = useRef(null);
 
-  // API base URL for your Python backend
-  const API_BASE_URL = process.env.NODE_ENV === 'production'
-  ? 'https://your-backend-url'
-  : 'http://localhost:8000';
+  // Use environment variable for backend URL
+  const API_BASE_URL = process.env.REACT_APP_MCP_CLIENT_URL ||
+    (process.env.NODE_ENV === 'production'
+        ? window.location.origin
+        : 'http://localhost:8000');
 
   // Auto-scroll to bottom of messages
   const scrollToBottom = () => {

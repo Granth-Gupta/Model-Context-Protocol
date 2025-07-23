@@ -54,12 +54,14 @@ class MCPChatbot:
         # Default configuration
         clients_config = [
             {
-                "url": employee_url or "http://0.0.0.0:8002/sse",
+                "url": employee_url or "https://mcp-server-employee-hze7pjwixa-uc.a.run.app/sse"
+                       or "http://0.0.0.0:8002/sse",
                 "name": "employee_server",
                 "client_attr": "employee_client"
             },
             {
-                "url": leave_url or "http://0.0.0.0:8001/sse",
+                "url": leave_url or "https://mcp-server-leaving-hze7pjwixa-uc.a.run.app/sse"
+                       or "http://0.0.0.0:8001/sse",
                 "name": "leave_server",
                 "client_attr": "leave_client"
             }
@@ -74,10 +76,16 @@ class MCPChatbot:
 
     def setup_fastapi(self):
         """Setup FastAPI routes and middleware"""
-        # Enable CORS for React frontend
+        # Enable CORS for React frontend - Updated for Cloud Run
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+            allow_origins=[
+                "http://localhost:5173",
+                "http://localhost:3000",
+                "http://127.0.0.1:5173",
+                "https://*.run.app",  # Allow Cloud Run origins
+                "*"  # For development - remove in production
+            ],
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -203,8 +211,18 @@ class MCPChatbot:
         """Initialize MCP clients with proper tool processing (based on main_1.py)"""
         try:
             # Connect to both servers
-            self.employee_client = Client("http://127.0.0.1:8002/sse")
-            self.leave_client = Client("http://127.0.0.1:8001/sse")
+            # self.employee_client = Client("http://127.0.0.1:8002/sse")
+            # self.leave_client = Client("http://127.0.0.1:8001/sse")
+
+            # Get server configuration
+            server_configs = self.get_server_config()
+
+            # Connect to servers using environment URLs
+            employee_url = os.getenv("EMPLOYEE_SERVER_URL", "https://mcp-server-employee-hze7pjwixa-uc.a.run.app/sse")
+            leave_url = os.getenv("LEAVE_SERVER_URL", "https://mcp-server-leaving-hze7pjwixa-uc.a.run.app/sse")
+
+            self.employee_client = Client(employee_url)
+            self.leave_client = Client(leave_url)
 
             # Initialize clients
             await self.employee_client.__aenter__()
@@ -390,32 +408,34 @@ async def start_web_server():
     """Start the web server for React UI"""
     # Initialize the chatbot
     success = await chatbot.initialize()
-
     if not success:
         logger.error("❌ Failed to initialize chatbot completely")
         return
 
+    # Get port from environment variable (Cloud Run requirement)
+    port = int(os.environ.get('PORT', 8000))
+
     # Start web server
     logger.info("🌐 Starting MCP Client Web Server...")
-    logger.info("🔗 React UI should connect to: http://localhost:8000")
-    logger.info("📋 API Documentation: http://localhost:8000/docs")
-    logger.info("🏥 Health Check: http://localhost:8000/health")
+    logger.info(f"🔗 React UI should connect to: http://0.0.0.0:{port}")
+    logger.info(f"📋 API Documentation: http://0.0.0.0:{port}/docs")
+    logger.info(f"🏥 Health Check: http://0.0.0.0:{port}/health")
 
     config = uvicorn.Config(
         app=chatbot.app,
-        host="0.0.0.0",
-        port=8000,
+        host="0.0.0.0",  # Changed from localhost to 0.0.0.0
+        port=port,  # Use dynamic port from environment
         log_level="info",
         reload=False
     )
-    server = uvicorn.Server(config)
 
+    server = uvicorn.Server(config)
     try:
         await server.serve()
     except KeyboardInterrupt:
         logger.info("🛑 Server stopped by user")
     finally:
-        # Cleanup
+        # Cleanup code remains the same
         try:
             if chatbot.employee_client:
                 await chatbot.employee_client.__aexit__(None, None, None)
