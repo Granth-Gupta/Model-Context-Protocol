@@ -1,21 +1,23 @@
-FROM node:18-alpine
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
+RUN npm ci
 
-# Install dependencies
-RUN npm install
-
-# Copy source code
+# Copy source code and build
 COPY . .
+RUN npm run build
 
-# Expose port 3000 (default for development server)
-EXPOSE 3000
+FROM nginx:alpine AS production
 
-# Set environment to development for npm run dev
-ENV NODE_ENV=development
+# Copy built app to nginx
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Run development server
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
