@@ -137,8 +137,12 @@ class MCPChatbot:
 
         @self.app.get("/health")
         async def health_check():
-            """Health check endpoint"""
-            return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+            """Health check endpoint for Cloud Run"""
+            return {
+                "status": "healthy",
+                "service": "mcp-client",
+                "timestamp": datetime.now().isoformat()
+            }
 
         @self.app.get("/tools")
         async def get_tools():
@@ -423,8 +427,8 @@ async def start_web_server():
 
     config = uvicorn.Config(
         app=chatbot.app,
-        host="0.0.0.0",  # Changed from localhost to 0.0.0.0
-        port=port,  # Use dynamic port from environment
+        host="0.0.0.0",  # Must be 0.0.0.0 for Cloud Run
+        port=port,  # Dynamic port from environment
         log_level="info",
         reload=False
     )
