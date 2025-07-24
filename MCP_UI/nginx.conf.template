@@ -7,7 +7,7 @@ http {
     default_type  application/octet-stream;
 
     server {
-        listen 8080;  # Cloud Run expects port 8080
+        listen 8080;
         server_name _;
         root /usr/share/nginx/html;
         index index.html;
@@ -17,9 +17,9 @@ http {
             try_files $uri $uri/ /index.html;
         }
 
-        # API proxy to MCP client
+        # API proxy to MCP client - using template substitution
         location /api/ {
-            proxy_pass ${MCP_CLIENT_URL}/;
+            proxy_pass ${REACT_APP_MCP_CLIENT_URL}/;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
