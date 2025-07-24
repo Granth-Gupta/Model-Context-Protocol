@@ -129,3 +129,5 @@ Once all components are running:
 
 <img width="1200" height="600" alt="image" src="https://github.com/user-attachments/assets/0df0a356-a989-4544-8619-6cb4e77bd963" />
 
+<img width="1200" height="600" alt="image" src="https://github.com/user-attachments/assets/8e1e4307-de0b-49e3-a8cd-58dfb1a0a19c" />
+
