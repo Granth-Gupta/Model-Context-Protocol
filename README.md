@@ -64,7 +64,7 @@ npm install
 npm run dev
 
 
-🌐 The UI will be available at `http://localhost:3000` (or the port specified in the console output).
+🌐 The UI will be available at `http://localhost:5173` (or the port specified in the console output).
 
 ---
 
@@ -127,28 +127,5 @@ Once all components are running:
 
 🚀 **Access the web interface** through your browser at the URL displayed when running `npm run dev` to start using the Model Context Protocol system.
 
----
+<img width="1200" height="600" alt="image" src="https://github.com/user-attachments/assets/0df0a356-a989-4544-8619-6cb4e77bd963" />
 
-## 🤝 Contributing
-
-Feel free to submit issues and enhancement requests!
-
-- 🐛 **Bug Reports**: [Create an issue](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
-- 💡 **Feature Requests**: [Submit a proposal](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
-- 🔧 **Pull Requests**: Welcome!
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 📞 Support
-
-If you encounter any issues or have questions:
-
-- 📧 **Email**: [Your Email]
-- 🐙 **GitHub Issues**: [Project Issues](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/Granth-Gupta/Model-Context-Protocol/discussions)
