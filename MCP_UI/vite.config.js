@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     rollupOptions: {
-      input: '/index.html'
+      input: 'index.html'  // No leading slash needed
     }
   }
 })

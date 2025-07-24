@@ -1,18 +1,24 @@
+"""
+MCP Client Web API
+A FastAPI-based web service for interacting with Model Context Protocol servers
+"""
+
+from __future__ import annotations
+
 import asyncio
-import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
+import os
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import google.generativeai as genai
-from fastmcp import Client
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp import Client
 from pydantic import BaseModel
-import uvicorn
-import aiohttp
 
 # Load environment variables
 load_dotenv()
@@ -23,76 +29,176 @@ logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
+    """Request model for chat endpoint"""
     message: str
 
 
 class ChatResponse(BaseModel):
+    """Response model for chat endpoint"""
     response: str
     tools_used: List[str] = []
     timestamp: str
 
 
 class MCPChatbot:
-    def __init__(self):
-        self.gemini_model = None
-        self.employee_client = None
-        self.leave_client = None
-        self.available_tools = {}
-        self.is_initialized = False
+    """Main MCP Chatbot class handling FastAPI server and MCP client connections"""
+
+    def __init__(self) -> None:
+        self.gemini_model: Any = None
+        self.employee_client: Optional[Client] = None
+        self.leave_client: Optional[Client] = None
+        self.available_tools: Dict[str, Dict[str, Any]] = {}
+        self.is_initialized: bool = False
+        self.server_port: Optional[int] = None
 
         # FastAPI app
-        self.app = FastAPI(title="MCP Client API", description="Web API for MCP Client UI")
+        self.app = FastAPI(
+            title="MCP Client API",
+            description="Web API for MCP Client UI"
+        )
         self.setup_fastapi()
 
-    def get_server_config(self):
+    def get_server_config(self) -> List[Dict[str, str]]:
         """Get MCP server configuration from environment variables or use defaults"""
-
-        # Get from environment variables first
         employee_url = os.getenv("EMPLOYEE_SERVER_URL")
         leave_url = os.getenv("LEAVE_SERVER_URL")
 
-        # Default configuration
         clients_config = [
             {
-                "url": employee_url or "https://mcp-server-employee-hze7pjwixa-uc.a.run.app/sse"
-                       or "http://0.0.0.0:8002/sse",
+                "url": employee_url or "https://mcp-server-employee-273927490120.us-central1.run.app/sse",
                 "name": "employee_server",
                 "client_attr": "employee_client"
             },
             {
-                "url": leave_url or "https://mcp-server-leaving-hze7pjwixa-uc.a.run.app/sse"
-                       or "http://0.0.0.0:8001/sse",
+                "url": leave_url or "https://mcp-server-leaving-273927490120.us-central1.run.app/sse",
                 "name": "leave_server",
                 "client_attr": "leave_client"
             }
         ]
 
-        # Log configuration
         logger.info("🔧 MCP Server Configuration:")
         for config in clients_config:
             logger.info(f"   - {config['name']}: {config['url']}")
 
         return clients_config
 
-    def setup_fastapi(self):
+    async def test_mcp_connection(self, client: Optional[Client], server_name: str) -> bool:
+        """Test if MCP server is actually reachable and responding"""
+        try:
+            if not client:
+                logger.warning(f"{server_name}: Client not initialized")
+                return False
+
+            # Try to list available tools as a connectivity test
+            result = await client.list_tools()
+            if result:
+                logger.info(f"{server_name}: Connection test successful")
+                return True
+            else:
+                logger.warning(f"{server_name}: Connection test returned empty result")
+                return False
+
+        except Exception as e:
+            logger.error(f"{server_name}: Connection test failed - {e}")
+            return False
+
+    def _extract_tool_info(self, tool: Any) -> Tuple[str, str, Dict[str, Any]]:
+        """Extract tool information from tool object or dict"""
+        tool_name = tool.name if hasattr(tool, 'name') else tool.get('name', '')
+        tool_desc = tool.description if hasattr(tool, 'description') else tool.get('description', '')
+        tool_params: Dict[str, Any] = {}
+
+        if hasattr(tool, 'inputSchema'):
+            tool_params = tool.inputSchema.get('properties', {})
+        elif isinstance(tool, dict) and 'inputSchema' in tool:
+            tool_params = tool['inputSchema'].get('properties', {})
+
+        return tool_name, tool_desc, tool_params
+
+    async def _process_server_tools(self, client: Client, server_name: str) -> None:
+        """Process tools from a specific server"""
+        try:
+            tools_response = await client.list_tools()
+            tools = tools_response.tools if hasattr(tools_response, 'tools') else tools_response
+
+            for tool in tools:
+                tool_name, tool_desc, tool_params = self._extract_tool_info(tool)
+
+                self.available_tools[tool_name] = {
+                    'client': client,
+                    'server': server_name,
+                    'description': tool_desc,
+                    'parameters': tool_params
+                }
+        except Exception as e:
+            logger.error(f"Failed to get {server_name} tools: {e}")
+
+    def setup_fastapi(self) -> None:
         """Setup FastAPI routes and middleware"""
-        # Enable CORS for React frontend - Updated for Cloud Run
+
+        # Health check endpoint
+        @self.app.get("/health")
+        async def health_check() -> Dict[str, Any]:
+            try:
+                # Test actual connectivity to MCP servers
+                employee_status = await self.test_mcp_connection(self.employee_client, "employee_server")
+                leave_status = await self.test_mcp_connection(self.leave_client, "leave_server")
+
+                # Determine overall health
+                overall_status = "healthy" if (employee_status and leave_status) else "degraded"
+
+                return {
+                    "status": overall_status,
+                    "service": "mcp-client",
+                    "timestamp": datetime.now().isoformat(),
+                    "port": self.server_port or int(os.environ.get('PORT', 8000)),
+                    "employees_connected": employee_status,
+                    "leave_connected": leave_status,
+                    "server_details": {
+                        "employee_server": {
+                            "status": "connected" if employee_status else "disconnected",
+                            "url": os.getenv("EMPLOYEE_SERVER_URL", "not_configured")
+                        },
+                        "leave_server": {
+                            "status": "connected" if leave_status else "disconnected",
+                            "url": os.getenv("LEAVE_SERVER_URL", "not_configured")
+                        }
+                    }
+                }
+            except Exception as e:
+                logger.error(f"Health check failed: {e}")
+                return {
+                    "status": "unhealthy",
+                    "service": "mcp-client",
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                    "employees_connected": False,
+                    "leave_connected": False
+                }
+
+        # Enable CORS for React frontend
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=[
                 "http://localhost:5173",
                 "http://localhost:3000",
                 "http://127.0.0.1:5173",
-                "https://*.run.app",  # Allow Cloud Run origins
+                "https://*.run.app",
+                "https://mcp-ui-273927490120.us-central1.run.app",
                 "*"  # For development - remove in production
             ],
             allow_methods=["*"],
             allow_headers=["*"],
         )
 
-        # API Routes
+        # Root endpoint
+        @self.app.get("/")
+        async def root() -> Dict[str, str]:
+            return {"message": "MCP Client API is running", "service": "mcp-client"}
+
+        # Chat endpoint
         @self.app.post("/chat", response_model=ChatResponse)
-        async def chat_endpoint(request: ChatRequest):
+        async def chat_endpoint(request: ChatRequest) -> ChatResponse:
             try:
                 if not self.is_initialized:
                     raise HTTPException(status_code=503, detail="MCP client not initialized")
@@ -107,8 +213,9 @@ class MCPChatbot:
                 logger.error(f"Chat endpoint error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # Status endpoint
         @self.app.get("/status")
-        async def status_endpoint():
+        async def status_endpoint() -> Dict[str, Any]:
             """Get system status and available tools"""
             server_configs = self.get_server_config()
             server_status = {}
@@ -135,17 +242,9 @@ class MCPChatbot:
                 "total_tools": len(self.available_tools)
             }
 
-        @self.app.get("/health")
-        async def health_check():
-            """Health check endpoint for Cloud Run"""
-            return {
-                "status": "healthy",
-                "service": "mcp-client",
-                "timestamp": datetime.now().isoformat()
-            }
-
+        # Tools endpoint
         @self.app.get("/tools")
-        async def get_tools():
+        async def get_tools() -> Dict[str, Any]:
             """Get available tools list"""
             return {
                 "tools": list(self.available_tools.keys()),
@@ -160,35 +259,7 @@ class MCPChatbot:
                 ]
             }
 
-    async def test_server_connection(self, url: str, server_name: str) -> bool:
-        """Test if MCP server is reachable"""
-        try:
-            # Try multiple endpoints to test connectivity
-            test_urls = [
-                f"{url.replace('/sse', '')}/health",
-                f"{url.replace('/sse', '')}/status",
-                url.replace('/sse', '')
-            ]
-
-            async with aiohttp.ClientSession() as session:
-                for test_url in test_urls:
-                    try:
-                        async with session.get(test_url, timeout=5) as response:
-                            if response.status in [200, 404]:  # 404 is also ok, means server is running
-                                logger.info(f"✅ {server_name} reachable at {test_url} (status: {response.status})")
-                                return True
-                    except Exception as e:
-                        logger.debug(f"Failed to connect to {test_url}: {e}")
-                        continue
-
-                logger.warning(f"⚠️  {server_name} not reachable at any endpoint")
-                return False
-
-        except Exception as e:
-            logger.warning(f"⚠️  {server_name} connection test failed: {e}")
-            return False
-
-    def setup_gemini(self):
+    def setup_gemini(self) -> bool:
         """Initialize Gemini AI model"""
         try:
             api_key = os.getenv("GEMINI_API_KEY")
@@ -211,80 +282,56 @@ class MCPChatbot:
             logger.error(f"❌ Failed to initialize Gemini: {e}")
             return False
 
-    async def setup_mcp_clients(self):
-        """Initialize MCP clients with proper tool processing (based on main_1.py)"""
+    async def setup_mcp_clients(self) -> bool:
+        """Initialize MCP clients with proper tool processing"""
         try:
-            # Connect to both servers
-            # self.employee_client = Client("http://127.0.0.1:8002/sse")
-            # self.leave_client = Client("http://127.0.0.1:8001/sse")
+            # Get server URLs from environment variables
+            employee_url = os.getenv(
+                "EMPLOYEE_SERVER_URL",
+                "https://mcp-server-employee-273927490120.us-central1.run.app/sse"
+            )
+            leave_url = os.getenv(
+                "LEAVE_SERVER_URL",
+                "https://mcp-server-leaving-273927490120.us-central1.run.app/sse"
+            )
 
-            # Get server configuration
-            server_configs = self.get_server_config()
+            logger.info(f"Connecting to Employee Server: {employee_url}")
+            logger.info(f"Connecting to Leave Server: {leave_url}")
 
-            # Connect to servers using environment URLs
-            employee_url = os.getenv("EMPLOYEE_SERVER_URL", "https://mcp-server-employee-hze7pjwixa-uc.a.run.app/sse")
-            leave_url = os.getenv("LEAVE_SERVER_URL", "https://mcp-server-leaving-hze7pjwixa-uc.a.run.app/sse")
-
+            # Initialize MCP clients
             self.employee_client = Client(employee_url)
             self.leave_client = Client(leave_url)
 
-            # Initialize clients
+            # Enter async context
             await self.employee_client.__aenter__()
             await self.leave_client.__aenter__()
 
-            # Get available tools from both servers
-            employee_tools_response = await self.employee_client.list_tools()
-            leave_tools_response = await self.leave_client.list_tools()
+            # Test connections
+            employee_connected = await self.test_mcp_connection(self.employee_client, "employee_server")
+            leave_connected = await self.test_mcp_connection(self.leave_client, "leave_server")
 
-            # Process employee tools (using main_1.py logic)
-            employee_tools = employee_tools_response.tools if hasattr(employee_tools_response,
-                                                                      'tools') else employee_tools_response
-            for tool in employee_tools:
-                tool_name = tool.name if hasattr(tool, 'name') else tool.get('name')
-                tool_desc = tool.description if hasattr(tool, 'description') else tool.get('description', '')
-                tool_params = {}
+            logger.info(f"Employee server connection: {'✅' if employee_connected else '❌'}")
+            logger.info(f"Leave server connection: {'✅' if leave_connected else '❌'}")
 
-                if hasattr(tool, 'inputSchema'):
-                    tool_params = tool.inputSchema.get('properties', {})
-                elif isinstance(tool, dict) and 'inputSchema' in tool:
-                    tool_params = tool['inputSchema'].get('properties', {})
+            # Load tools from connected servers
+            if employee_connected:
+                await self._process_server_tools(self.employee_client, 'employee_server')
 
-                self.available_tools[tool_name] = {
-                    'client': self.employee_client,
-                    'server': 'employee_server',
-                    'description': tool_desc,
-                    'parameters': tool_params
-                }
+            if leave_connected:
+                await self._process_server_tools(self.leave_client, 'leave_server')
 
-            # Process leave tools (using main_1.py logic)
-            leave_tools = leave_tools_response.tools if hasattr(leave_tools_response, 'tools') else leave_tools_response
-            for tool in leave_tools:
-                tool_name = tool.name if hasattr(tool, 'name') else tool.get('name')
-                tool_desc = tool.description if hasattr(tool, 'description') else tool.get('description', '')
-                tool_params = {}
-
-                if hasattr(tool, 'inputSchema'):
-                    tool_params = tool.inputSchema.get('properties', {})
-                elif isinstance(tool, dict) and 'inputSchema' in tool:
-                    tool_params = tool['inputSchema'].get('properties', {})
-
-                self.available_tools[tool_name] = {
-                    'client': self.leave_client,
-                    'server': 'leave_server',
-                    'description': tool_desc,
-                    'parameters': tool_params
-                }
-
-            logger.info(f"✅ MCP clients initialized successfully")
+            logger.info("✅ MCP clients setup completed")
             logger.info(f"📊 Available tools: {list(self.available_tools.keys())}")
             logger.info(f"🔧 Total tools loaded: {len(self.available_tools)}")
 
+            return employee_connected or leave_connected
+
         except Exception as e:
             logger.error(f"❌ Error initializing MCP clients: {e}")
-            logger.error(f"Error details: {type(e).__name__}")
+            return False
 
     async def call_mcp_tool(self, tool_name: str, parameters: Dict[str, Any]) -> str:
-        """Call an MCP tool and return the result (based on main_1.py)"""
+        """Call an MCP tool and return the result"""
         if tool_name not in self.available_tools:
             return f"❌ Tool '{tool_name}' not found. Available tools: {list(self.available_tools.keys())}"
 
@@ -295,12 +342,11 @@ class MCPChatbot:
         except Exception as e:
             return f"❌ Error calling tool '{tool_name}': {e}"
 
-    def parse_gemini_response(self, response: str) -> tuple[bool, Optional[str], Optional[Dict]]:
-        """Parse Gemini response to check if it contains a tool call (from main_1.py)"""
+    @staticmethod
+    def parse_gemini_response(response: str) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """Parse Gemini response to check if it contains a tool call"""
         try:
-            # Check if response contains JSON tool call
             if "\"action\":" in response and "\"tool_name\":" in response:
-                # Extract JSON from response
                 start = response.find('{')
                 end = response.rfind('}') + 1
                 if start != -1 and end != 0:
@@ -315,10 +361,13 @@ class MCPChatbot:
             return False, None, None
 
     def create_system_prompt(self) -> str:
-        """Create system prompt with available tools information (from main_1.py)"""
+        """Create system prompt with available tools information"""
         tools_info = []
         for tool_name, tool_data in self.available_tools.items():
-            params = ", ".join([f"{k}: {v.get('type', 'string')}" for k, v in tool_data['parameters'].items()])
+            params = ", ".join([
+                f"{k}: {v.get('type', 'string')}"
+                for k, v in tool_data['parameters'].items()
+            ])
             tools_info.append(f"- {tool_name}({params}): {tool_data['description']}")
 
         return f"""You are a helpful chatbot assistant that can help with employee directory and leave management tasks.
@@ -346,32 +395,30 @@ Examples of when to use tools:
 - "Apply leave for E001 on 2025-08-15" → use apply_leave
 """
 
-    async def chat(self, user_message: str) -> tuple[str, List[str]]:
-        """Process user message and return response (based on main_1.py)"""
-        tools_used = []
+    async def chat(self, user_message: str) -> Tuple[str, List[str]]:
+        """Process user message and return response"""
+        tools_used: List[str] = []
 
         try:
             if not self.available_tools:
                 return "❌ No MCP tools available. Please check server connections.", tools_used
 
-            # Create full prompt with system instructions and user message
             full_prompt = f"{self.create_system_prompt()}\n\nUser: {user_message}\nAssistant:"
 
-            # Get response from Gemini
             if self.gemini_model:
                 response = self.gemini_model.generate_content(full_prompt)
                 gemini_response = response.text
 
-                # Check if Gemini wants to use a tool
                 is_tool_call, tool_name, parameters = self.parse_gemini_response(gemini_response)
 
                 if is_tool_call and tool_name:
-                    # Execute the tool
                     tool_result = await self.call_mcp_tool(tool_name, parameters)
                     tools_used.append(tool_name)
 
-                    # Get final response from Gemini with tool result
-                    final_prompt = f"{full_prompt}\n{gemini_response}\n\nTool result: {tool_result}\n\nPlease provide a natural response based on this information:"
+                    final_prompt = (
+                        f"{full_prompt}\n{gemini_response}\n\nTool result: {tool_result}\n\n"
+                        "Please provide a natural response based on this information:"
+                    )
                     final_response = self.gemini_model.generate_content(final_prompt)
                     return final_response.text, tools_used
                 else:
@@ -384,33 +431,43 @@ Examples of when to use tools:
             logger.error(error_msg)
             return error_msg, tools_used
 
-    async def initialize(self):
+    async def initialize(self) -> bool:
         """Initialize all components"""
-        logger.info("🚀 Initializing MCP Chatbot with fixed tool processing...")
+        logger.info("🚀 Initializing MCP Chatbot...")
 
         # Initialize Gemini
         gemini_ready = self.setup_gemini()
 
-        # Initialize MCP clients with proper tool processing
-        await self.setup_mcp_clients()
+        # Initialize MCP clients
+        mcp_success = await self.setup_mcp_clients()
 
-        self.is_initialized = True
+        self.is_initialized = mcp_success
 
-        logger.info(f"✅ MCP Chatbot Web Server Ready!")
+        logger.info("✅ MCP Chatbot Web Server Ready!")
         logger.info(f"📊 Gemini API: {'✅ Ready' if gemini_ready else '❌ Unavailable'}")
         logger.info(f"🔧 Available Tools: {len(self.available_tools)}")
-        logger.info(f"🌐 API Endpoints: http://localhost:8000/docs")
 
         return self.is_initialized
+
+    async def cleanup(self) -> None:
+        """Cleanup MCP client connections"""
+        try:
+            if self.employee_client:
+                await self.employee_client.__aexit__(None, None, None)
+            if self.leave_client:
+                await self.leave_client.__aexit__(None, None, None)
+            logger.info("✅ Cleanup completed")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
 
 
 # Global chatbot instance
 chatbot = MCPChatbot()
 
 
-async def start_web_server():
+async def start_web_server() -> None:
     """Start the web server for React UI"""
-    # Initialize the chatbot
+    # Initialize the chatbot first
     success = await chatbot.initialize()
     if not success:
         logger.error("❌ Failed to initialize chatbot completely")
@@ -418,17 +475,23 @@ async def start_web_server():
 
     # Get port from environment variable (Cloud Run requirement)
     port = int(os.environ.get('PORT', 8000))
+    chatbot.server_port = port
 
-    # Start web server
     logger.info("🌐 Starting MCP Client Web Server...")
-    logger.info(f"🔗 React UI should connect to: http://0.0.0.0:{port}")
-    logger.info(f"📋 API Documentation: http://0.0.0.0:{port}/docs")
+    logger.info(f"🔗 Server starting on: http://0.0.0.0:{port}")
     logger.info(f"🏥 Health Check: http://0.0.0.0:{port}/health")
+    logger.info(f"📋 API Documentation: http://0.0.0.0:{port}/docs")
+
+    # Debug: List registered routes
+    logger.info("📋 Registered FastAPI routes:")
+    for route in chatbot.app.routes:
+        if hasattr(route, 'methods') and hasattr(route, 'path'):
+            logger.info(f"  {route.methods} {route.path}")
 
     config = uvicorn.Config(
         app=chatbot.app,
-        host="0.0.0.0",  # Must be 0.0.0.0 for Cloud Run
-        port=port,  # Dynamic port from environment
+        host="0.0.0.0",
+        port=port,
         log_level="info",
         reload=False
     )
@@ -436,18 +499,11 @@ async def start_web_server():
     server = uvicorn.Server(config)
     try:
         await server.serve()
-    except KeyboardInterrupt:
-        logger.info("🛑 Server stopped by user")
+    except Exception as e:
+        logger.error(f"Server failed to start: {e}")
+        raise
     finally:
-        # Cleanup code remains the same
-        try:
-            if chatbot.employee_client:
-                await chatbot.employee_client.__aexit__(None, None, None)
-            if chatbot.leave_client:
-                await chatbot.leave_client.__aexit__(None, None, None)
-            logger.info("✅ Cleanup completed")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        await chatbot.cleanup()
 
 
 if __name__ == "__main__":
