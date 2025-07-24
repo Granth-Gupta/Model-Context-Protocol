@@ -77,3 +77,78 @@ Follow these steps in order:
 git clone https://github.com/Granth-Gupta/Model-Context-Protocol.git
 cd Model-Context-Protocol
 
+
+2. **🐍 Set Up MCP Client**
+
+cd MCP_client
+pip install -r requirements.txt
+uv run main.py
+
+3. **🎨 Set Up MCP UI** *(in a new terminal)*
+cd MCP_UI
+npm install
+npm run dev
+
+---
+
+## 🔧 Server Configuration
+
+The system is configured to use the following server endpoints:
+
+| 🏷️ Component | 🌐 URL |
+|---------------|--------|
+| **Employee Server** | `https://mcp-server-employee-273927490120.us-central1.run.app/` |
+| **Leaving Server** | `https://mcp-server-leaving-273927490120.us-central1.run.app/` |
+
+---
+
+## 🛠️ Troubleshooting
+
+Common issues and solutions:
+
+- **🐍 Python Dependencies**: Ensure you have `uv` installed. If not, install it with:
+pip install uv
+
+- **📦 Node.js Issues**: Make sure you're using Node.js 16+ and npm is properly installed:
+node --version
+npm --version
+
+- **🚪 Port Conflicts**: If the default ports are in use, the applications will automatically use alternative ports
+
+---
+
+## 🎯 Usage
+
+Once all components are running:
+
+1. 🔄 The **MCP Client** handles the core protocol communication
+2. 🖥️ The **MCP UI** provides a user-friendly interface for interaction  
+3. 🌐 The **MCP Servers** process requests and return responses
+
+🚀 **Access the web interface** through your browser at the URL displayed when running `npm run dev` to start using the Model Context Protocol system.
+
+---
+
+## 🤝 Contributing
+
+Feel free to submit issues and enhancement requests!
+
+- 🐛 **Bug Reports**: [Create an issue](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
+- 💡 **Feature Requests**: [Submit a proposal](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
+- 🔧 **Pull Requests**: Welcome!
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 📞 Support
+
+If you encounter any issues or have questions:
+
+- 📧 **Email**: [Your Email]
+- 🐙 **GitHub Issues**: [Project Issues](https://github.com/Granth-Gupta/Model-Context-Protocol/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/Granth-Gupta/Model-Context-Protocol/discussions)
