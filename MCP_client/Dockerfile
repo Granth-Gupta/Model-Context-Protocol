@@ -22,9 +22,9 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 app && \
     chown -R app:app /app
 USER app
 
-# Health check that matches your endpoint
+# Health check using dynamic PORT (matches Cloud Run behavior)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Start with uv
-CMD ["uv", "run", "main.py"]
+# Use shell form to properly expand PORT environment variable
+CMD ["sh", "-c", "uv run uvicorn main:chatbot.app --host 0.0.0.0 --port ${PORT:-8000}"]
