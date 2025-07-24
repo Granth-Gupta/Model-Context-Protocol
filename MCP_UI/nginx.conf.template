@@ -1,36 +1,51 @@
-events {
-    worker_connections 1024;
-}
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
 
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
+    # Enable gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
 
-    server {
-        listen 8080;
-        server_name _;
-        root /usr/share/nginx/html;
-        index index.html;
+    # Handle React Router (SPA routing)
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
+    }
 
-        # Handle React Router
-        location / {
-            try_files $uri $uri/ /index.html;
-        }
+    # API proxy to MCP client backend
+    location /api/ {
+        proxy_pass ${REACT_APP_MCP_CLIENT_URL}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
 
-        # API proxy to MCP client - using template substitution
-        location /api/ {
-            proxy_pass ${REACT_APP_MCP_CLIENT_URL}/;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
+        # Handle CORS
+        proxy_set_header Access-Control-Allow-Origin *;
+        proxy_set_header Access-Control-Allow-Methods "GET, POST, OPTIONS";
+        proxy_set_header Access-Control-Allow-Headers "Content-Type, Authorization";
 
-        # Health check endpoint
-        location /health {
-            access_log off;
-            return 200 "healthy\n";
-            add_header Content-Type text/plain;
-        }
+        # Timeout settings
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Health check endpoint - must return 200 for Cloud Run
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Static asset caching
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
     }
 }

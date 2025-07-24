@@ -12,16 +12,19 @@ RUN npm run build
 
 FROM nginx:alpine AS production
 
-# Install envsubst for environment variable substitution
+# Install gettext for envsubst (environment variable substitution)
 RUN apk add --no-cache gettext
 
-# Copy built app to nginx (React builds to 'build', not 'dist')
+# Copy built app to nginx - React builds to 'build', not 'dist'
 COPY --from=builder /app/build /usr/share/nginx/html
 
-# Copy nginx template
-COPY nginx.conf.template /etc/nginx/templates/nginx.conf.template
+# Copy nginx template for environment variable processing
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+
+# Set default environment variable if not provided
+ENV REACT_APP_MCP_CLIENT_URL=https://mcp-client-273927490120.us-central1.run.app
 
 EXPOSE 8080
 
-# Use nginx with template processing
+# Use nginx with automatic template processing
 CMD ["nginx", "-g", "daemon off;"]

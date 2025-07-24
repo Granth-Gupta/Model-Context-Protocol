@@ -14,10 +14,10 @@ const App = () => {
   const inputRef = useRef(null);
   const toolsDropdownRef = useRef(null);
 
-  // Use environment variable for backend URL
+  // Improved API base URL configuration
   const API_BASE_URL = process.env.REACT_APP_MCP_CLIENT_URL ||
     (process.env.NODE_ENV === 'production'
-        ? window.location.origin
+        ? 'https://mcp-client-273927490120.us-central1.run.app'  // Fallback to your known client URL
         : 'http://localhost:8000');
 
   // Auto-scroll to bottom of messages
