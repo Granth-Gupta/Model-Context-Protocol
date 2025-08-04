@@ -4,8 +4,8 @@ import './App.css';
 // API Configuration
 const API_BASE_URL = import.meta.env.VITE_MCP_CLIENT_URL ||
     (import.meta.env.MODE === 'production'
-        ? 'https://mcp-client-273927490120.us-central1.run.app'
-        : 'http://localhost:8000');
+        ? 'https://mcp-client-service-514638629767.us-central1.run.app'
+        : 'http://localhost:8080');
 
 function App() {
   // State management

@@ -1,9 +1,7 @@
 """
-MCP Client Web API
-A FastAPI-based web service for interacting with Model Context Protocol servers
+MCP Client Web API - FastAPI-based service to interact with MCP servers and Gemini LLM.
+Adapted for idiomatic FastAPI usage and proper async resource lifecycle.
 """
-
-from __future__ import annotations
 
 import asyncio
 import json
@@ -15,499 +13,279 @@ from typing import Any, Dict, List, Optional, Tuple
 import google.generativeai as genai
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastmcp import Client
 from pydantic import BaseModel
+from fastmcp import Client
 
-# Load environment variables
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("mcp_client_api")
 
+# =====================
+# GLOBAL STATE
+# =====================
+app = FastAPI(
+    title="MCP Client API",
+    description="Web API for MCP Client UI"
+)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://your-frontend-domain.com",  # TODO: Replace with actual frontend domain(s)
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+employee_client: Optional[Client] = None
+leave_client: Optional[Client] = None
+available_tools: Dict[str, Dict[str, Any]] = {}
+gemini_model: Optional[Any] = None
+startup_time = datetime.utcnow()
+is_initialized = False
+
+# =====================
+# Pydantic Schemas
+# =====================
 class ChatRequest(BaseModel):
-    """Request model for chat endpoint"""
     message: str
 
-
 class ChatResponse(BaseModel):
-    """Response model for chat endpoint"""
     response: str
     tools_used: List[str] = []
     timestamp: str
 
-
-class MCPChatbot:
-    """Main MCP Chatbot class handling FastAPI server and MCP client connections"""
-
-    def __init__(self) -> None:
-        self.gemini_model: Any = None
-        self.employee_client: Optional[Client] = None
-        self.leave_client: Optional[Client] = None
-        self.available_tools: Dict[str, Dict[str, Any]] = {}
-        self.is_initialized: bool = False
-        self.server_port: Optional[int] = None
-
-        # FastAPI app
-        self.app = FastAPI(
-            title="MCP Client API",
-            description="Web API for MCP Client UI"
-        )
-        self.setup_fastapi()
-
-    def get_server_config(self) -> List[Dict[str, str]]:
-        """Get MCP server configuration from environment variables or use defaults"""
-        employee_url = os.getenv("EMPLOYEE_SERVER_URL")
-        leave_url = os.getenv("LEAVE_SERVER_URL")
-
-        clients_config = [
-            {
-                "url": employee_url or "https://mcp-server-employee-273927490120.us-central1.run.app/sse",
-                "name": "employee_server",
-                "client_attr": "employee_client"
-            },
-            {
-                "url": leave_url or "https://mcp-server-leaving-273927490120.us-central1.run.app/sse",
-                "name": "leave_server",
-                "client_attr": "leave_client"
-            }
-        ]
-
-        logger.info("🔧 MCP Server Configuration:")
-        for config in clients_config:
-            logger.info(f"   - {config['name']}: {config['url']}")
-
-        return clients_config
-
-    async def test_mcp_connection(self, client: Optional[Client], server_name: str) -> bool:
-        """Test if MCP server is actually reachable and responding"""
-        try:
-            if not client:
-                logger.warning(f"{server_name}: Client not initialized")
-                return False
-
-            # Try to list available tools as a connectivity test
-            result = await client.list_tools()
-            if result:
-                logger.info(f"{server_name}: Connection test successful")
-                return True
-            else:
-                logger.warning(f"{server_name}: Connection test returned empty result")
-                return False
-
-        except Exception as e:
-            logger.error(f"{server_name}: Connection test failed - {e}")
-            return False
-
-    def _extract_tool_info(self, tool: Any) -> Tuple[str, str, Dict[str, Any]]:
-        """Extract tool information from tool object or dict"""
-        tool_name = tool.name if hasattr(tool, 'name') else tool.get('name', '')
-        tool_desc = tool.description if hasattr(tool, 'description') else tool.get('description', '')
-        tool_params: Dict[str, Any] = {}
-
-        if hasattr(tool, 'inputSchema'):
-            tool_params = tool.inputSchema.get('properties', {})
-        elif isinstance(tool, dict) and 'inputSchema' in tool:
-            tool_params = tool['inputSchema'].get('properties', {})
-
-        return tool_name, tool_desc, tool_params
-
-    async def _process_server_tools(self, client: Client, server_name: str) -> None:
-        """Process tools from a specific server"""
-        try:
-            tools_response = await client.list_tools()
-            tools = tools_response.tools if hasattr(tools_response, 'tools') else tools_response
-
-            for tool in tools:
-                tool_name, tool_desc, tool_params = self._extract_tool_info(tool)
-
-                self.available_tools[tool_name] = {
-                    'client': client,
-                    'server': server_name,
-                    'description': tool_desc,
-                    'parameters': tool_params
-                }
-        except Exception as e:
-            logger.error(f"Failed to get {server_name} tools: {e}")
-
-    def setup_fastapi(self) -> None:
-        """Setup FastAPI routes and middleware"""
-
-        # Health check endpoint
-        @self.app.get("/health")
-        async def health_check() -> Dict[str, Any]:
-            try:
-                # Test actual connectivity to MCP servers
-                employee_status = await self.test_mcp_connection(self.employee_client, "employee_server")
-                leave_status = await self.test_mcp_connection(self.leave_client, "leave_server")
-
-                # Determine overall health
-                overall_status = "healthy" if (employee_status and leave_status) else "degraded"
-
-                return {
-                    "status": overall_status,
-                    "service": "mcp-client",
-                    "timestamp": datetime.now().isoformat(),
-                    "port": self.server_port or int(os.environ.get('PORT', 8000)),
-                    "employees_connected": employee_status,
-                    "leave_connected": leave_status,
-                    "server_details": {
-                        "employee_server": {
-                            "status": "connected" if employee_status else "disconnected",
-                            "url": os.getenv("EMPLOYEE_SERVER_URL", "not_configured")
-                        },
-                        "leave_server": {
-                            "status": "connected" if leave_status else "disconnected",
-                            "url": os.getenv("LEAVE_SERVER_URL", "not_configured")
-                        }
-                    }
-                }
-            except Exception as e:
-                logger.error(f"Health check failed: {e}")
-                return {
-                    "status": "unhealthy",
-                    "service": "mcp-client",
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat(),
-                    "employees_connected": False,
-                    "leave_connected": False
-                }
-
-        # Enable CORS for React frontend
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_origins=[
-                "http://localhost:5173",
-                "http://localhost:3000",
-                "http://127.0.0.1:5173",
-                "https://*.run.app",
-                "https://mcp-ui-273927490120.us-central1.run.app",
-                "*"  # For development - remove in production
-            ],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-
-        # Root endpoint
-        @self.app.get("/")
-        async def root() -> Dict[str, str]:
-            return {"message": "MCP Client API is running", "service": "mcp-client"}
-
-        # Chat endpoint
-        @self.app.post("/chat", response_model=ChatResponse)
-        async def chat_endpoint(request: ChatRequest) -> ChatResponse:
-            try:
-                if not self.is_initialized:
-                    raise HTTPException(status_code=503, detail="MCP client not initialized")
-
-                response, tools_used = await self.chat(request.message)
-                return ChatResponse(
-                    response=response,
-                    tools_used=tools_used,
-                    timestamp=datetime.now().isoformat()
-                )
-            except Exception as e:
-                logger.error(f"Chat endpoint error: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        # Status endpoint
-        @self.app.get("/status")
-        async def status_endpoint() -> Dict[str, Any]:
-            """Get system status and available tools"""
-            server_configs = self.get_server_config()
-            server_status = {}
-
-            for config in server_configs:
-                client = getattr(self, config["client_attr"], None)
-                server_status[config["name"]] = {
-                    "connected": client is not None,
-                    "url": config["url"]
-                }
-
-            return {
-                "initialized": self.is_initialized,
-                "available_tools": [
-                    {
-                        "name": name,
-                        "description": info["description"],
-                        "server": info["server"]
-                    }
-                    for name, info in self.available_tools.items()
-                ],
-                "servers": server_status,
-                "gemini_ready": self.gemini_model is not None,
-                "total_tools": len(self.available_tools)
-            }
-
-        # Tools endpoint
-        @self.app.get("/tools")
-        async def get_tools() -> Dict[str, Any]:
-            """Get available tools list"""
-            return {
-                "tools": list(self.available_tools.keys()),
-                "count": len(self.available_tools),
-                "details": [
-                    {
-                        "name": name,
-                        "server": info["server"],
-                        "description": info["description"]
-                    }
-                    for name, info in self.available_tools.items()
-                ]
-            }
-
-    def setup_gemini(self) -> bool:
-        """Initialize Gemini AI model"""
-        try:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                logger.warning("GEMINI_API_KEY not found in environment variables")
-                return False
-
-            genai.configure(api_key=api_key)
-            self.gemini_model = genai.GenerativeModel('gemini-2.0-flash-exp')
-
-            # Test the connection
-            test_response = self.gemini_model.generate_content("Hello")
-            if test_response and test_response.text:
-                logger.info("✅ Gemini API initialized successfully")
-                return True
-            else:
-                raise ValueError("Gemini API test failed")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize Gemini: {e}")
-            return False
-
-    async def setup_mcp_clients(self) -> bool:
-        """Initialize MCP clients with proper tool processing"""
-        try:
-            # Get server URLs from environment variables
-            employee_url = os.getenv(
-                "EMPLOYEE_SERVER_URL",
-                "https://mcp-server-employee-273927490120.us-central1.run.app/sse"
-            )
-            leave_url = os.getenv(
-                "LEAVE_SERVER_URL",
-                "https://mcp-server-leaving-273927490120.us-central1.run.app/sse"
-            )
-
-            logger.info(f"Connecting to Employee Server: {employee_url}")
-            logger.info(f"Connecting to Leave Server: {leave_url}")
-
-            # Initialize MCP clients
-            self.employee_client = Client(employee_url)
-            self.leave_client = Client(leave_url)
-
-            # Enter async context
-            await self.employee_client.__aenter__()
-            await self.leave_client.__aenter__()
-
-            # Test connections
-            employee_connected = await self.test_mcp_connection(self.employee_client, "employee_server")
-            leave_connected = await self.test_mcp_connection(self.leave_client, "leave_server")
-
-            logger.info(f"Employee server connection: {'✅' if employee_connected else '❌'}")
-            logger.info(f"Leave server connection: {'✅' if leave_connected else '❌'}")
-
-            # Load tools from connected servers
-            if employee_connected:
-                await self._process_server_tools(self.employee_client, 'employee_server')
-
-            if leave_connected:
-                await self._process_server_tools(self.leave_client, 'leave_server')
-
-            logger.info("✅ MCP clients setup completed")
-            logger.info(f"📊 Available tools: {list(self.available_tools.keys())}")
-            logger.info(f"🔧 Total tools loaded: {len(self.available_tools)}")
-
-            return employee_connected or leave_connected
-
-        except Exception as e:
-            logger.error(f"❌ Error initializing MCP clients: {e}")
-            return False
-
-    async def call_mcp_tool(self, tool_name: str, parameters: Dict[str, Any]) -> str:
-        """Call an MCP tool and return the result"""
-        if tool_name not in self.available_tools:
-            return f"❌ Tool '{tool_name}' not found. Available tools: {list(self.available_tools.keys())}"
-
-        try:
-            client = self.available_tools[tool_name]['client']
-            result = await client.call_tool(tool_name, parameters)
-            return str(result.content[0].text if result.content else "No result returned")
-        except Exception as e:
-            return f"❌ Error calling tool '{tool_name}': {e}"
-
-    @staticmethod
-    def parse_gemini_response(response: str) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
-        """Parse Gemini response to check if it contains a tool call"""
-        try:
-            if "\"action\":" in response and "\"tool_name\":" in response:
-                start = response.find('{')
-                end = response.rfind('}') + 1
-                if start != -1 and end != 0:
-                    json_str = response[start:end]
-                    tool_call = json.loads(json_str)
-
-                    if tool_call.get("action") == "use_tool":
-                        return True, tool_call.get("tool_name"), tool_call.get("parameters", {})
-
-            return False, None, None
-        except json.JSONDecodeError:
-            return False, None, None
-
-    def create_system_prompt(self) -> str:
-        """Create system prompt with available tools information"""
-        tools_info = []
-        for tool_name, tool_data in self.available_tools.items():
-            params = ", ".join([
-                f"{k}: {v.get('type', 'string')}"
-                for k, v in tool_data['parameters'].items()
-            ])
-            tools_info.append(f"- {tool_name}({params}): {tool_data['description']}")
-
-        return f"""You are a helpful chatbot assistant that can help with employee directory and leave management tasks.
-
-Available tools:
-{chr(10).join(tools_info)}
-
-When a user asks for something that requires these tools, respond with a tool call in this JSON format:
-{{
-    "action": "use_tool",
-    "tool_name": "tool_name_here",
-    "parameters": {{
-        "param1": "value1",
-        "param2": "value2"
-    }}
-}}
-
-If the user asks something that doesn't require tools, respond normally with helpful information.
-
-Examples of when to use tools:
-- "Show me employee E001's info" → use get_employee_info
-- "Find employees in Engineering department" → use search_employees
-- "Get team members for manager M001" → use get_team_members
-- "How many leave days does E002 have?" → use get_leave_balance  
-- "Apply leave for E001 on 2025-08-15" → use apply_leave
-"""
-
-    async def chat(self, user_message: str) -> Tuple[str, List[str]]:
-        """Process user message and return response"""
-        tools_used: List[str] = []
-
-        try:
-            if not self.available_tools:
-                return "❌ No MCP tools available. Please check server connections.", tools_used
-
-            full_prompt = f"{self.create_system_prompt()}\n\nUser: {user_message}\nAssistant:"
-
-            if self.gemini_model:
-                response = self.gemini_model.generate_content(full_prompt)
-                gemini_response = response.text
-
-                is_tool_call, tool_name, parameters = self.parse_gemini_response(gemini_response)
-
-                if is_tool_call and tool_name:
-                    tool_result = await self.call_mcp_tool(tool_name, parameters)
-                    tools_used.append(tool_name)
-
-                    final_prompt = (
-                        f"{full_prompt}\n{gemini_response}\n\nTool result: {tool_result}\n\n"
-                        "Please provide a natural response based on this information:"
-                    )
-                    final_response = self.gemini_model.generate_content(final_prompt)
-                    return final_response.text, tools_used
-                else:
-                    return gemini_response, tools_used
-            else:
-                return f"I'll help you with: {user_message}. Let me use the available tools.", tools_used
-
-        except Exception as e:
-            error_msg = f"❌ Error processing message: {e}"
-            logger.error(error_msg)
-            return error_msg, tools_used
-
-    async def initialize(self) -> bool:
-        """Initialize all components"""
-        logger.info("🚀 Initializing MCP Chatbot...")
-
-        # Initialize Gemini
-        gemini_ready = self.setup_gemini()
-
-        # Initialize MCP clients
-        mcp_success = await self.setup_mcp_clients()
-
-        self.is_initialized = mcp_success
-
-        logger.info("✅ MCP Chatbot Web Server Ready!")
-        logger.info(f"📊 Gemini API: {'✅ Ready' if gemini_ready else '❌ Unavailable'}")
-        logger.info(f"🔧 Available Tools: {len(self.available_tools)}")
-
-        return self.is_initialized
-
-    async def cleanup(self) -> None:
-        """Cleanup MCP client connections"""
-        try:
-            if self.employee_client:
-                await self.employee_client.__aexit__(None, None, None)
-            if self.leave_client:
-                await self.leave_client.__aexit__(None, None, None)
-            logger.info("✅ Cleanup completed")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-
-
-# Global chatbot instance
-chatbot = MCPChatbot()
-
-
-async def start_web_server() -> None:
-    """Start the web server for React UI"""
-    # Initialize the chatbot first
-    success = await chatbot.initialize()
-    if not success:
-        logger.error("❌ Failed to initialize chatbot completely")
-        return
-
-    # Get port from environment variable (Cloud Run requirement)
-    port = int(os.environ.get('PORT', 8000))
-    chatbot.server_port = port
-
-    logger.info("🌐 Starting MCP Client Web Server...")
-    logger.info(f"🔗 Server starting on: http://0.0.0.0:{port}")
-    logger.info(f"🏥 Health Check: http://0.0.0.0:{port}/health")
-    logger.info(f"📋 API Documentation: http://0.0.0.0:{port}/docs")
-
-    # Debug: List registered routes
-    logger.info("📋 Registered FastAPI routes:")
-    for route in chatbot.app.routes:
-        if hasattr(route, 'methods') and hasattr(route, 'path'):
-            logger.info(f"  {route.methods} {route.path}")
-
-    config = uvicorn.Config(
-        app=chatbot.app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-        reload=False
-    )
-
-    server = uvicorn.Server(config)
+# =====================
+# Utility Functions
+# =====================
+def get_server_config() -> List[Dict[str, Any]]:
+    employee_url = os.getenv("EMPLOYEE_SERVER_URL", "https://mcp-server-employee-273927490120.us-central1.run.app/sse")
+    leave_url = os.getenv("LEAVE_SERVER_URL", "https://mcp-server-leaving-273927490120.us-central1.run.app/sse")
+    return [
+        {"url": employee_url, "name": "employee_server", "attr": "employee_client"},
+        {"url": leave_url, "name": "leave_server", "attr": "leave_client"},
+    ]
+
+async def test_mcp_connection(client: Client, server_name: str) -> bool:
     try:
-        await server.serve()
+        if not client:
+            logger.warning(f"No MCP client for {server_name}")
+            return False
+        result = await client.list_tools()
+        return bool(result)
     except Exception as e:
-        logger.error(f"Server failed to start: {e}")
-        raise
-    finally:
-        await chatbot.cleanup()
+        logger.error(f"Connection test failed for {server_name}: {e}")
+        return False
 
+def _extract_tool_info(tool: Any) -> Tuple[str, str, Dict[str, Any]]:
+    # Extract tool info for prompt injection
+    name = getattr(tool, "name", tool.get("name", ""))
+    desc = getattr(tool, "description", tool.get("description", ""))
+    params = {}
+    schema = getattr(tool, "inputSchema", None) or tool.get("inputSchema", None)
+    if schema:
+        params = schema.get("properties", {})
+    return name, desc, params
 
-if __name__ == "__main__":
+async def process_tools_from_client(client: Client, server_name: str) -> None:
+    global available_tools
     try:
-        asyncio.run(start_web_server())
-    except KeyboardInterrupt:
-        print("\n👋 Server stopped!")
+        tools = await client.list_tools()
+        tools_list = getattr(tools, "tools", tools)
+        for tool in tools_list:
+            name, description, parameters = _extract_tool_info(tool)
+            available_tools[name] = {
+                "client": client,
+                "server": server_name,
+                "description": description,
+                "parameters": parameters,
+            }
+    except Exception as e:
+        logger.error(f"Failed to load tools from {server_name}: {e}")
+
+async def get_tools_for_prompt() -> List[Dict[str, Any]]:
+    return [
+        {"name": name, "description": info.get("description", "")}
+        for name, info in available_tools.items()
+    ]
+
+def setup_gemini() -> bool:
+    global gemini_model
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.warning("Missing GEMINI_API_KEY")
+        return False
+    try:
+        genai.configure(api_key=api_key)
+        gemini_model = genai.TextGenerationModel.from_pretrained("models/text-bison-001")
+        logger.info("Gemini model initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini model: {e}")
+        return False
+
+async def setup_mcp_clients() -> bool:
+    global employee_client, leave_client, available_tools
+    configs = get_server_config()
+    all_ok = True
+    for config in configs:
+        try:
+            client = Client(config["url"])
+            await client.__aenter__()
+            connected = await test_mcp_connection(client, config["name"])
+            if not connected:
+                logger.warning(f"Failed to connect to {config['name']}")
+                all_ok = False
+            else:
+                if config["attr"] == "employee_client":
+                    employee_client = client
+                else:
+                    leave_client = client
+                await process_tools_from_client(client, config["name"])
+                logger.info(f"Connected to {config['name']}")
+        except Exception as e:
+            logger.error(f"Error connecting to {config['name']}: {e}")
+            all_ok = False
+    return all_ok
+
+async def call_tool(tool_name: str, params: dict) -> str:
+    if tool_name not in available_tools:
+        return f"Tool '{tool_name}' not found."
+    client = available_tools[tool_name]["client"]
+    try:
+        result = await client.call_tool(tool_name, params)
+        if hasattr(result, "content"):
+            return result.content if isinstance(result.content, str) else str(result.content)
+        return str(result)
+    except Exception as e:
+        logger.error(f"Error calling tool {tool_name}: {e}")
+        return f"Error calling tool {tool_name}: {e}"
+
+def parse_gemini_response(response_text: str) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+    try:
+        if "\"action\":" in response_text and "\"tool_name\":" in response_text:
+            start = response_text.find('{')
+            end = response_text.rfind('}') + 1
+            json_str = response_text[start:end]
+            parsed = json.loads(json_str)
+            if parsed.get("action") == "use_tool":
+                return True, parsed.get("tool_name"), parsed.get("parameters", {})
+        return False, None, None
+    except Exception:
+        return False, None, None
+
+async def cleanup():
+    global employee_client, leave_client, available_tools, gemini_model
+    available_tools = {}
+    if employee_client is not None:
+        try:
+            await employee_client.__aexit__(None, None, None)
+        except Exception:
+            pass
+    employee_client = None
+    if leave_client is not None:
+        try:
+            await leave_client.__aexit__(None, None, None)
+        except Exception:
+            pass
+    leave_client = None
+    gemini_model = None
+
+# =====================
+# FastAPI Lifecycle and Routes
+# =====================
+
+@app.on_event("startup")
+async def on_startup():
+    global is_initialized
+    logger.info("Initializing Gemini and MCP clients...")
+    gemini_ok = setup_gemini()
+    mcp_ok = await setup_mcp_clients()
+    is_initialized = gemini_ok and mcp_ok
+    if is_initialized:
+        logger.info("Startup: All systems initialized.")
+    else:
+        logger.error("Startup: Initialization failed; check logs.")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    logger.info("Cleaning up resources...")
+    await cleanup()
+
+@app.get("/", tags=["Root"])
+async def root():
+    uptime_seconds = (datetime.utcnow() - startup_time).total_seconds()
+    return {
+        "message": "MCP Client API is running",
+        "uptime_seconds": uptime_seconds,
+        "health_status": "healthy" if is_initialized else "initializing"
+    }
+
+@app.get("/health", tags=["Health"])
+async def health():
+    employee_ok = await test_mcp_connection(employee_client, "employee_server")
+    leave_ok = await test_mcp_connection(leave_client, "leave_server")
+    overall_status = "healthy" if employee_ok and leave_ok else "degraded"
+    return {"status": overall_status}
+
+@app.get("/tools", tags=["Tools"])
+async def tools():
+    if not is_initialized:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Agent not initialized")
+    tools_info = []
+    for name, info in available_tools.items():
+        tools_info.append({
+            "name": name,
+            "description": info.get("description", ""),
+            "server": info.get("server", ""),
+        })
+    return {"tools": tools_info, "count": len(tools_info)}
+
+@app.post("/chat", response_model=ChatResponse, tags=["Chat"])
+async def chat_endpoint(request: ChatRequest):
+    if not is_initialized or gemini_model is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail="Agent not initialized")
+    tool_descriptions = "\n".join(
+        f"- {t['name']} : {t['description']}"
+        for t in await get_tools_for_prompt()
+    )
+    user_input = request.message.strip()
+    prompt = f"You are an intelligent assistant with access to the following tools:\n{tool_descriptions}\nUser: {user_input}\nAssistant:"
+
+    tools_used: List[str] = []
+    try:
+        # Call Gemini model (synchronously here)
+        response = gemini_model.generate_text(prompt)
+        text_response = response.text if hasattr(response, "text") else str(response)
+
+        # Check if response includes a tool call
+        is_tool_call, tool_name, params = parse_gemini_response(text_response)
+        if is_tool_call and tool_name and tool_name in available_tools:
+            tool_result = await call_tool(tool_name, params)
+            tools_used.append(tool_name)
+            # Second LLM call for summarization
+            final_prompt = (f"{prompt}\nTool: {json.dumps({'tool_name': tool_name, 'result': tool_result})}\nPlease provide a summary.")
+            final_response = gemini_model.generate_text(final_prompt)
+            final_text = final_response.text if hasattr(final_response, "text") else str(final_response)
+        else:
+            final_text = text_response
+
+        timestamp = datetime.utcnow().isoformat()
+        return ChatResponse(response=final_text, tools_used=tools_used, timestamp=timestamp)
+    except Exception as e:
+        logger.error(f"Chat processing error: {e}")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+# ===============
+# MAIN LAUNCHER (for local run)
+# ===============
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+

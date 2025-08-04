@@ -1,32 +1,22 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip install uv
+# Install minimal OS packages if needed by any Python lib
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files
-COPY pyproject.toml uv.lock ./
+# (Optional) Install Node.js if MCP CLI needs it
+# RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+#     apt-get install -y nodejs
 
-# Install dependencies with uv
-RUN uv sync --frozen
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
 COPY . .
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash --uid 1000 app && \
-    chown -R app:app /app
-USER app
+ENV PORT=8080
 
-# Health check using dynamic PORT (matches Cloud Run behavior)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
-
-# Use shell form to properly expand PORT environment variable
-#CMD ["sh", "-c", "uv run uvicorn main:chatbot.app --host 0.0.0.0 --port ${PORT:-8000}"]
-CMD ["sh", "-c", "cd /app && uv run python main.py"]
-
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
